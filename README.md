@@ -30,6 +30,10 @@ Plus:
 - **`femboy_vibe` tool** — the model can check the vibe, hand you a headpat,
   or flip toggles itself (and says so with a toast, so a vibe change never
   happens behind your back)
+- **femboy-mcp pairing** — point `femboy.mcp.url` at a running
+  [`pi-femboy-mcp`](../femboy-mcp) server and every window shares one outfit,
+  one headpat counter and one set of feature flags; offline degrades to the
+  old purely-local vibe with zero drama
 - **talking chibi** — while the LLM streams an assistant message, up to a
   dozen wrapped lines of its words appear as a **speech column to the left of
   the chibi**, joined by a dashed rail whose `▸` tail points into her mouth;
@@ -43,7 +47,8 @@ Plus:
 Everything is driven by one store (`extensions/vibe.ts`): components read it at render
 time and subscribe for repaints, so a toggle lands on the next frame without
 rebuilding the editor — and flipping the ribbon never loses your draft. An
-idle session runs no timers at all.
+idle session runs no timers at all (a *paired* session keeps one MCP notification
+stream open — that's the point).
 
 Nothing pastel is allowed to break pi: the markdown transformer, the header,
 both bars, the editor ribbon, every tool row, the chibi and the closet guard
@@ -89,7 +94,7 @@ npm run check        # offline smoke tests: real pi loader, no TUI, no model cal
 npm run check -- --show   # …and print a sample panel / chibi / closet
 ```
 
-`tools/check.sh` runs two harnesses:
+`tools/check.sh` runs three harnesses:
 
 - `link-check.mjs` — every named import must resolve to a *real runtime export*
   (type-checking through jiti would not catch `import { homedir } from "node:path"`)
@@ -98,6 +103,10 @@ npm run check -- --show   # …and print a sample panel / chibi / closet
   closet surviving every key, the speech frame breathing open and deflating on
   hold/stall expiry, and fault injection proving each pastel renderer degrades
   to an apology line instead of throwing.
+- `pairing-check.mjs` — spawns the real femboy-mcp server from `../femboy-mcp/dist`
+  and proves the pairing contract end-to-end: both sync directions, gated-skin
+  refusals, self-paint after a push, and a SIGKILLed server degrading to local
+  mode without a throw (skips gracefully when the server repo isn't built).
 
 ## Config
 
@@ -119,7 +128,30 @@ The `femboy` key in `settings.json` (project overrides user):
 
 Layering (later wins): defaults → `settings.json` → the newest `femboy-tui`
 custom entry in the session, so `/reload`, resume and fork keep your headpat
-count.
+count — and when paired, the shared server state wins on top of all of that.
+
+### Pairing with femboy-mcp
+
+```json
+{
+  "femboy": {
+    "mcp": {
+      "url": "http://127.0.0.1:7413/mcp",
+      "enabled": true,
+      "secretEnvVar": "FEMBOY_SECRET"
+    }
+  }
+}
+```
+
+With a live [`pi-femboy-mcp`](../femboy-mcp) HTTP server: outfit, feature
+flags and the headpat counter sync across every paired window (`femboy://state`
++ `femboy://mood` subscriptions paint the vibe; local changes push back through
+`femboy_set_outfit` / `femboy_toggle_feature`), a status bar badge `♡mcp` marks
+it, and gated skins are refused by the server, not painted. No server, wrong
+url, `enabled:false` — the chrome stays exactly as it was: local mode, silent.
+The connector is a hand-rolled streamable-HTTP MCP client (`extensions/mcp.ts`):
+no new dependencies, every socket path guarded, reconnect with backoff.
 
 ## Outfits
 
@@ -137,6 +169,8 @@ dock and the closet overlay.
 |---|---|
 | `extensions/index.ts` | extension entry: commands, shortcut, tool, wiring |
 | `extensions/vibe.ts` | single source of truth for pastel state + settings reader |
+| `extensions/mcp.ts` | hand-rolled streamable-HTTP MCP client (pairing transport) |
+| `extensions/pairing.ts` | femboy-mcp connector: shared state ↔ vibe, push/paint, offline fallback |
 | `extensions/chrome.ts` | slot takeover: welcome, status bar, metrics, footer, editor |
 | `extensions/companion.ts` | chibi dock on the right |
 | `extensions/speech.ts` | the chibi's live speech store (fed by the markdown transformer) |
