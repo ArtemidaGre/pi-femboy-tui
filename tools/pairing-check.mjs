@@ -118,6 +118,10 @@ ok("first-pair sync paints outfit + headpats from the shared state", async () =>
 	await stranger.connect();
 	for (let i = 0; i < 60 && stranger.status !== "paired"; i++) await wait(50);
 	assert.equal(stranger.status, "paired", "stranger could not pair");
+	const pres = await stranger.readResource("femboy://presence");
+	const mine = (pres.sessions ?? []).find((s) => s.clientId === stranger.clientId);
+	assert.ok(mine, "presence must register the x-femboy-client clientId from initialize");
+	assert.equal(mine.pid, process.pid, "presence must carry the client's real pid (x-femboy-pid)");
 	await stranger.callTool("femboy_set_outfit", { outfit: "Gothic Mochi" });
 	await stranger.callTool("femboy_headpat", { intensity: 4 });
 	for (let i = 0; i < 60 && vibeMod.getVibe().headpats < 4; i++) await wait(50);

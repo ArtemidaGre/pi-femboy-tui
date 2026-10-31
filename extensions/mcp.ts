@@ -299,13 +299,10 @@ export function createMcpClient(config: McpConfig): FemboyMcpClient {
 	async function handshake(): Promise<boolean> {
 		setStatus("connecting", "handshake");
 		try {
-			const initHeaders: Record<string, string> = {
-				"content-type": "application/json",
-				accept: "application/json, text/event-stream",
-			};
-			if (config.secretEnvVar && process.env[config.secretEnvVar]) {
-				initHeaders.authorization = `Bearer ${process.env[config.secretEnvVar]}`;
-			}
+			// presence hints ride the initialize request — the server reads
+			// x-femboy-* headers there, not on later RPCs
+			const initHeaders = baseHeaders();
+			delete initHeaders["mcp-session-id"]; // none exists yet
 			const response = await fetch(config.url, {
 				method: "POST",
 				headers: initHeaders,
