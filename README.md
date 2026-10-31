@@ -29,14 +29,15 @@ Plus:
 - **`/femboy-off`** — hand every slot back to pi instantly
 - **`femboy_vibe` tool** — the model can check the vibe, hand you a headpat,
   or flip toggles itself
-- **talking chibi** — while the LLM streams an assistant message, its words
-  render as subtitles in the companion's bubble; the sprite lip-syncs (`ω` ↔
-  `▽` every tick) while the head *slaps a cell down every other open mouth*
-  and sways on the third bar — a 4-beat puppet cadence that rests whenever
-  the stream pauses after punctuation. The frame breathes wider for the
-  sentence and deflates back to sprite width ~8 s after the message lands.
-  The transcript itself is untouched — display-only, fed from the markdown
-  transformer, zero extra inference
+- **talking chibi** — while the LLM streams an assistant message, up to a
+  dozen wrapped lines of its words appear as a **speech column to the left of
+  the chibi**, joined by a dashed rail whose `▸` tail points into her mouth;
+  the sprite lip-syncs (`ω` ↔ `▽` every tick) while the head *slaps a cell
+  down every other open mouth* and sways on the third bar — a 4-beat puppet
+  cadence that rests whenever the stream pauses after punctuation. The frame
+  breathes wider for the column and deflates back to sprite width ~8 s after
+  the message lands. The transcript itself is untouched — display-only, fed
+  from the markdown transformer, zero extra inference
 
 Everything is driven by one store (`vibe.ts`): components read it at render
 time and subscribe for repaints, so a toggle lands on the next frame without

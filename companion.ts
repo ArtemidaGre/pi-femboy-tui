@@ -9,17 +9,20 @@
  *
  * While the LLM talks, the chibi speaks: speech.ts feeds the model's live
  * streaming text (via the markdown transformer in index.ts) and the bubble
- * above the sprite renders it as a subtitle window. The frame *breathes* —
- * it widens to fit the words and deflates back to sprite width when the
- * bubble empties. This works because pi resolves overlay layout from the
- * options object **by reference, every render cycle** (`resolveOverlayLayout`
- * in tui.js): we keep our own reference to the very object handed to
- * `custom({ overlayOptions })` and mutate `width` in the animation tick.
- * No close/reopen, no flicker.
+ * renders it as a **text column to the left of the sprite**, using the whole
+ * frame height — so a dozen wrapped lines stay readable instead of four
+ * cramped subtitles. A thin dashed rail separates words from chibi, and the
+ * rail turns into a `▸` tail on the last line, pointing into her mouth.
+ * The frame *breathes* — it widens leftward to fit the column and deflates
+ * back to sprite width when the bubble empties. This works because pi
+ * resolves overlay layout from the options object **by reference, every
+ * render cycle** (`resolveOverlayLayout` in tui.js): we keep our own
+ * reference to the very object handed to `custom({ overlayOptions })` and
+ * mutate `width` in the animation tick. No close/reopen, no flicker.
  *
  * Placement rules:
  * - anchored `top-right`, one cell of margin; width = sprite when silent,
- *   up to `TALK_COLS` while the bubble carries text
+ *   up to `TALK_COLS` (speech column + rail + sprite) while talking
  * - `visible()` hides it on cramped terminals (< 96 cols or < 24 rows) so the
  *   chibi never eats the transcript on a laptop screen — resize and it returns
  * - the only *timer-owning* part of the chrome besides the closet: one 250 ms
@@ -41,7 +44,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { GLYPH, type Swatch, labeledRule, ramp } from "./palette";
+import { GLYPH, type Swatch, ramp } from "./palette";
 import { type Expression, type Heart, SPRITE_COLS, renderSprite } from "./sprites";
 import { SPEECH_COLS, clearSpeech, expireSpeech, getSpeech } from "./speech";
 import { currentOutfit, getVibe } from "./vibe";
@@ -49,8 +52,10 @@ import { currentOutfit, getVibe } from "./vibe";
 /** Sprite + 1-cell padding per side + 1-cell border per side. Silent width. */
 const BOX_COLS = SPRITE_COLS + 4;
 
-/** Widest the frame breathes while the chibi is talking. */
-const TALK_COLS = Math.max(BOX_COLS, SPEECH_COLS + 6);
+/** Speech column + 1-cell rail + sprite block + border per side. Sized so the
+ * text column's usable width is exactly `SPEECH_COLS` — no truncating lines
+ * that were already wrapped to fit. */
+const TALK_COLS = Math.max(BOX_COLS, SPEECH_COLS + BOX_COLS + 2);
 
 /** Only show the chibi when the terminal has room to spare. */
 function roomy(termWidth: number, termHeight: number): boolean {
@@ -178,27 +183,41 @@ export class ChibiCompanion implements Component {
 		this.lastPats = vibe.headpats;
 		const side = theme.style(GLYPH.side, { fg: ramp(outfit.palette.border as Swatch, 0.5) });
 		const speech = getSpeech();
+		// The left column only fits once the frame has actually breathed open.
+		const talking = speech !== null && speech.lines.length > 0 && inner > SPRITE_COLS + 3;
+		const stops = outfit.palette.border as Swatch;
+		const spriteRows = renderSprite(outfit, this.expression(), this.tick, this.hearts, theme);
 
 		const lines: string[] = [this.border("top", w)];
-		if (speech) {
-			// Subtitle window, oldest line on top; the newest line is the live
-			// edge of the stream, so the bubble always ends where words are.
-			for (const line of speech.lines) {
-				const text = truncateToWidth(line, inner - 2);
-				lines.push(side + padTo(` ${theme.fg("text", text)}`, inner) + side);
+		if (talking && speech) {
+			// Text column on the left, chibi on the right; lines are top-anchored
+			// to the head, so the newest words land around chest height and the
+			// `▸` tail on the last line points into the mouth.
+			const textW = inner - 1 - (SPRITE_COLS + 2);
+			const block = speech.lines;
+			const tailRow = block.length - 1;
+			for (let i = 0; i < spriteRows.length; i++) {
+				const text =
+					i < block.length ? theme.fg("text", truncateToWidth(block[i]!, textW - 1)) : "";
+				const rail =
+					i === tailRow
+						? theme.style("▸", { fg: outfit.palette.blush })
+						: theme.style(GLYPH.thin, { fg: ramp(stops, i / Math.max(1, spriteRows.length - 1)) });
+				const body =
+					padTo(` ${text}`, textW) + rail + ` ${padTo(spriteRows[i] ?? "", SPRITE_COLS)} `;
+				lines.push(side + padTo(body, inner) + side);
 			}
-			// Heart divider: the bubble's tail, merged into the frame.
-			lines.push(side + labeledRule(theme, outfit.palette.border as Swatch, inner, ` ${GLYPH.heart} `) + side);
-		}
-		const spritePad = Math.max(0, Math.floor((inner - SPRITE_COLS) / 2));
-		for (const row of renderSprite(outfit, this.expression(), this.tick, this.hearts, theme)) {
-			lines.push(
-				side +
-					this.filler(spritePad, lines.length * 3) +
-					padTo(row, SPRITE_COLS) +
-					this.filler(inner - spritePad - SPRITE_COLS, lines.length * 3 + 4) +
-					side,
-			);
+		} else {
+			const spritePad = Math.max(0, Math.floor((inner - SPRITE_COLS) / 2));
+			for (const row of spriteRows) {
+				lines.push(
+					side +
+						this.filler(spritePad, lines.length * 3) +
+						padTo(row, SPRITE_COLS) +
+						this.filler(inner - spritePad - SPRITE_COLS, lines.length * 3 + 4) +
+						side,
+				);
+			}
 		}
 		lines.push(side + center(truncateToWidth(theme.fg("muted", outfit.name), inner), inner) + side);
 		lines.push(side + center(truncateToWidth(theme.fg("dim", `${GLYPH.heart} ${vibe.headpats}`), inner), inner) + side);

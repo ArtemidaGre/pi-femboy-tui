@@ -20,8 +20,9 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 /** Maximum cell width of one wrapped speech line (bubble interior). */
 export const SPEECH_COLS = 30;
 
-/** Subtitle window: how many wrapped lines the bubble shows. */
-const MAX_LINES = 4;
+/** Subtitle window: how many wrapped lines the bubble shows. Sized to the
+ * sprite's 16-row height — the left-side layout uses the whole frame. */
+const MAX_LINES = 12;
 
 /** Finished speech lingers this long (ms) before the bubble deflates. */
 const HOLD_MS = 8000;
