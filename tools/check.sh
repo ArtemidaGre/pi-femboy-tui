@@ -14,4 +14,5 @@ if [[ ! -d "$root/node_modules/@earendil-works/pi-tui" ]]; then
 fi
 
 node "$root/tools/link-check.mjs"
+node "$root/tools/pairing-check.mjs"
 node "$root/tools/render-check.mjs" "$@"
