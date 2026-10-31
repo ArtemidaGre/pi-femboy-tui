@@ -42,6 +42,7 @@ import {
 } from "./chrome";
 import { FemboyOverlay } from "./overlay";
 import { GLYPH } from "./palette";
+import { clearSpeech, speakMarkdown } from "./speech";
 import { OUTFITS, findOutfitIndex } from "./sprites";
 import { pastelToolRows } from "./tool-rows";
 import {
@@ -203,8 +204,15 @@ export default function femboy(pi: ExtensionAPI): void {
 
 	// Display-only transcript rendering: the model still reads and writes plain
 	// English. A blossom caret marks user turns; code never gets rewritten.
+	// Side effect: the assistant branch also feeds the chibi's speech bubble —
+	// this transformer is the only per-frame view of the live stream, so it is
+	// the producer for speech.ts (the companion consumes on its own tick).
 	pi.registerMarkdownTransformer((markdown, info) => {
 		const vibe = getVibe();
+		if (info.messageType === "assistant" && vibe.pastelMode && vibe.companion) {
+			speakMarkdown(markdown, info.isStreaming);
+		}
+		if (info.messageType === "user") clearSpeech();
 		if (info.messageType === "assistant-thinking") return markdown;
 		const marked = vibe.pastelMode && info.messageType === "user" ? markUserMessage(markdown, `${GLYPH.flower} `) : markdown;
 		if (!vibe.uwuMode) return marked;
@@ -219,6 +227,7 @@ export default function femboy(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		editorInstalled = false;
+		clearSpeech();
 		// Layering: defaults ← settings.json ← this session's saved vibe.
 		hydrateVibe({ ...DEFAULT_VIBE, ...settingsVibe(ctx.cwd), ...savedVibe(ctx) });
 		if (ctx.mode !== "tui") return;

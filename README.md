@@ -12,7 +12,7 @@ extension that takes over pi's whole terminal UI and makes it *soft*.
 | Slot | Taken over by |
 |---|---|
 | welcome panel | pastel header with vibe summary |
-| right dock | animated chibi companion (`companion.ts`) |
+| right dock | animated chibi companion (`companion.ts`) — speaks the model's live words in a speech bubble (`speech.ts`) |
 | status bar | outfit · headpats · mood · toggles |
 | editor | ribbon shell around pi's `CustomEditor` |
 | metrics bar / footer | pastel variants |
@@ -29,6 +29,14 @@ Plus:
 - **`/femboy-off`** — hand every slot back to pi instantly
 - **`femboy_vibe` tool** — the model can check the vibe, hand you a headpat,
   or flip toggles itself
+- **talking chibi** — while the LLM streams an assistant message, its words
+  render as subtitles in the companion's bubble; the sprite lip-syncs (`ω` ↔
+  `▽` every tick) while the head *slaps a cell down every other open mouth*
+  and sways on the third bar — a 4-beat puppet cadence that rests whenever
+  the stream pauses after punctuation. The frame breathes wider for the
+  sentence and deflates back to sprite width ~8 s after the message lands.
+  The transcript itself is untouched — display-only, fed from the markdown
+  transformer, zero extra inference
 
 Everything is driven by one store (`vibe.ts`): components read it at render
 time and subscribe for repaints, so a toggle lands on the next frame without

@@ -7,8 +7,19 @@
  * simply stays pending until `close()` calls `done()` — which is also how pi
  * tears the overlay down and disposes the component.
  *
+ * While the LLM talks, the chibi speaks: speech.ts feeds the model's live
+ * streaming text (via the markdown transformer in index.ts) and the bubble
+ * above the sprite renders it as a subtitle window. The frame *breathes* —
+ * it widens to fit the words and deflates back to sprite width when the
+ * bubble empties. This works because pi resolves overlay layout from the
+ * options object **by reference, every render cycle** (`resolveOverlayLayout`
+ * in tui.js): we keep our own reference to the very object handed to
+ * `custom({ overlayOptions })` and mutate `width` in the animation tick.
+ * No close/reopen, no flicker.
+ *
  * Placement rules:
- * - anchored `top-right`, one cell of margin, width = sprite + border + padding
+ * - anchored `top-right`, one cell of margin; width = sprite when silent,
+ *   up to `TALK_COLS` while the bubble carries text
  * - `visible()` hides it on cramped terminals (< 96 cols or < 24 rows) so the
  *   chibi never eats the transcript on a laptop screen — resize and it returns
  * - the only *timer-owning* part of the chrome besides the closet: one 250 ms
@@ -25,16 +36,21 @@ import {
 	type Color,
 	type Component,
 	type OverlayHandle,
+	type OverlayOptions,
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { GLYPH, type Swatch, ramp } from "./palette";
+import { GLYPH, type Swatch, labeledRule, ramp } from "./palette";
 import { type Expression, type Heart, SPRITE_COLS, renderSprite } from "./sprites";
+import { SPEECH_COLS, clearSpeech, expireSpeech, getSpeech } from "./speech";
 import { currentOutfit, getVibe } from "./vibe";
 
-/** Sprite + 1-cell padding per side + 1-cell border per side. */
+/** Sprite + 1-cell padding per side + 1-cell border per side. Silent width. */
 const BOX_COLS = SPRITE_COLS + 4;
+
+/** Widest the frame breathes while the chibi is talking. */
+const TALK_COLS = Math.max(BOX_COLS, SPEECH_COLS + 6);
 
 /** Only show the chibi when the terminal has room to spare. */
 function roomy(termWidth: number, termHeight: number): boolean {
@@ -61,14 +77,31 @@ export class ChibiCompanion implements Component {
 	constructor(
 		private tui: TUI,
 		private theme: Theme,
+		/** The live object pi reads per frame; mutating `width` resizes us. */
+		private overlayOpts: OverlayOptions,
 	) {
 		this.interval = setInterval(() => {
 			this.tick++;
 			this.stepHearts();
+			this.breathe();
 			this.tui.requestRender();
 		}, 250);
 		// Never hold the event loop open for a cosmetic animation.
 		this.interval.unref?.();
+	}
+
+	/** Grow toward the speech width while talking, deflate to sprite width. */
+	private breathe(): void {
+		expireSpeech();
+		const speech = getSpeech();
+		const said = speech?.raw ?? "";
+		// Keep the frame open while words keep arriving; a 12 s stall means the
+		// stream died (abort/crash) — deflate instead of freezing wide.
+		if (speech?.streaming && said === this.lastSpeechRaw) {
+			if (Date.now() - speech.updatedAt > 12000) clearSpeech();
+		}
+		const wanted = speech && speech.lines.length > 0 ? TALK_COLS : BOX_COLS;
+		if (this.overlayOpts.width !== wanted) this.overlayOpts.width = wanted;
 	}
 
 	dispose(): void {
@@ -98,14 +131,44 @@ export class ChibiCompanion implements Component {
 			.filter((heart) => heart.ttl > 0 && heart.row >= -1);
 	}
 
+	private lastSpeechRaw = "";
+
+	/**
+	 * `talk` rides the *stream*, not the clock: the chibi only animates while
+	 * new words actually arrived since the previous tick. Pauses after
+	 * punctuation land as natural rests (back to blink/idle), which is the
+	 * rhythm the eye expects.
+	 */
 	private expression(): Expression {
+		const speech = getSpeech();
+		const flowed = speech !== null && speech.streaming && speech.raw !== this.lastSpeechRaw;
+		this.lastSpeechRaw = speech?.raw ?? "";
 		if (this.tick < this.happyUntil) return getVibe().headpats >= 50 ? "love" : "happy";
+		if (flowed) return "talk";
 		return this.tick % 26 < 2 ? "blink" : "idle";
+	}
+
+	/** Dim drifting dots/space to fill the sky the frame opened up. */
+	private filler(count: number, phase: number): string {
+		if (count <= 0) return "";
+		const stops = currentOutfit().palette.border as Swatch;
+		let out = "";
+		for (let i = 0; i < count; i++) {
+			const k = (i + phase + Math.floor(this.tick / 3)) % 9;
+			if (k === 0 || k === 4) {
+				out += this.theme.style(k === 0 ? GLYPH.dot : GLYPH.sparkle, {
+					fg: ramp(stops, count <= 1 ? 0.5 : i / (count - 1)),
+				});
+			} else {
+				out += " ";
+			}
+		}
+		return out;
 	}
 
 	render(width: number): string[] {
 		const theme = this.theme;
-		const w = Math.min(Math.max(BOX_COLS, width), BOX_COLS);
+		const w = Math.min(Math.max(BOX_COLS, width), TALK_COLS);
 		const inner = w - 2;
 		const outfit = currentOutfit();
 		const vibe = getVibe();
@@ -114,29 +177,47 @@ export class ChibiCompanion implements Component {
 		if (this.lastPats !== undefined && vibe.headpats > this.lastPats) this.celebrate();
 		this.lastPats = vibe.headpats;
 		const side = theme.style(GLYPH.side, { fg: ramp(outfit.palette.border as Swatch, 0.5) });
+		const speech = getSpeech();
 
-		const lines: string[] = [this.border("top")];
+		const lines: string[] = [this.border("top", w)];
+		if (speech) {
+			// Subtitle window, oldest line on top; the newest line is the live
+			// edge of the stream, so the bubble always ends where words are.
+			for (const line of speech.lines) {
+				const text = truncateToWidth(line, inner - 2);
+				lines.push(side + padTo(` ${theme.fg("text", text)}`, inner) + side);
+			}
+			// Heart divider: the bubble's tail, merged into the frame.
+			lines.push(side + labeledRule(theme, outfit.palette.border as Swatch, inner, ` ${GLYPH.heart} `) + side);
+		}
+		const spritePad = Math.max(0, Math.floor((inner - SPRITE_COLS) / 2));
 		for (const row of renderSprite(outfit, this.expression(), this.tick, this.hearts, theme)) {
-			lines.push(side + padTo(` ${row}`, inner) + side);
+			lines.push(
+				side +
+					this.filler(spritePad, lines.length * 3) +
+					padTo(row, SPRITE_COLS) +
+					this.filler(inner - spritePad - SPRITE_COLS, lines.length * 3 + 4) +
+					side,
+			);
 		}
 		lines.push(side + center(truncateToWidth(theme.fg("muted", outfit.name), inner), inner) + side);
 		lines.push(side + center(truncateToWidth(theme.fg("dim", `${GLYPH.heart} ${vibe.headpats}`), inner), inner) + side);
-		lines.push(this.border("bottom"));
+		lines.push(this.border("bottom", w));
 		return lines.map((line) => truncateToWidth(line, w));
 	}
 
-	/** Exactly BOX_COLS cells: corner, gradient run, `label`, gradient run, corner. */
-	private border(edge: "top" | "bottom"): string {
+	/** Exactly `w` cells: corner, gradient run, `label`, gradient run, corner. */
+	private border(edge: "top" | "bottom", w: number): string {
 		const theme = this.theme;
 		const stops = currentOutfit().palette.border as Swatch;
 		const corners = edge === "top" ? ["╭", "╮"] : ["╰", "╯"];
 		const label = edge === "top" ? ` ${GLYPH.sparkle} ` : ` ${GLYPH.heart} `;
-		const run = BOX_COLS - 2 - visibleWidth(label);
+		const run = w - 2 - visibleWidth(label);
 		const leftCount = Math.floor(run / 2);
 		const cells = (count: number, start: number): string => {
 			let out = "";
 			for (let i = 0; i < count; i++) {
-				out += theme.style("─", { fg: ramp(stops, (start + i) / (BOX_COLS - 3)) });
+				out += theme.style("─", { fg: ramp(stops, (start + i) / Math.max(1, w - 3)) });
 			}
 			return out;
 		};
@@ -176,24 +257,27 @@ export class CompanionController {
 	open(ctx: ExtensionContext): void {
 		if (this.isOpen || ctx.mode !== "tui") return;
 		this.pending = true;
+		// pi stores this object by reference and re-reads `width` every render
+		// cycle, so the component breathing it is what resizes the overlay.
+		const overlayOptions: OverlayOptions = {
+			width: BOX_COLS,
+			minWidth: BOX_COLS,
+			anchor: "top-right",
+			margin: { top: 1, right: 1 },
+			nonCapturing: true,
+			visible: roomy,
+		};
 		void ctx.ui
 			.custom<void>(
 				(tui, theme, _kb, done) => {
 					this.pending = false;
 					this.done = () => done();
-					this.component = new ChibiCompanion(tui, theme);
+					this.component = new ChibiCompanion(tui, theme, overlayOptions);
 					return this.component;
 				},
 				{
 					overlay: true,
-					overlayOptions: {
-						width: BOX_COLS,
-						minWidth: BOX_COLS,
-						anchor: "top-right",
-						margin: { top: 1, right: 1 },
-						nonCapturing: true,
-						visible: roomy,
-					},
+					overlayOptions,
 					onHandle: (handle) => {
 						this.handle = handle;
 					},

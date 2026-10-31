@@ -70,14 +70,19 @@ const CLASS_COLOR: Readonly<Record<string, Exclude<keyof Palette, "border">>> = 
 const EYE_ROW = 4;
 const MOUTH_ROW = 5;
 
-export type Expression = "idle" | "blink" | "happy" | "love";
+export type Expression = "idle" | "blink" | "happy" | "love" | "talk";
 
 const FACE: Readonly<Record<Expression, { eye: string; mouth: string }>> = {
 	idle: { eye: "●", mouth: GLYPH.blushFace },
 	blink: { eye: "─", mouth: GLYPH.blushFace },
 	happy: { eye: "^", mouth: GLYPH.blushFace },
 	love: { eye: GLYPH.heart, mouth: GLYPH.blushFace },
+	// `talk` is the lip-sync face: the mouth alternates open/closed per tick
+	// (handled in renderSprite), so the chibi visibly moves while it speaks.
+	talk: { eye: "●", mouth: GLYPH.blushFace },
 };
+
+const MOUTH_OPEN = "▽";
 
 export const OUTFITS: readonly Outfit[] = [
 	{
@@ -237,8 +242,33 @@ export function renderSprite(
 	hearts: Heart[],
 	theme: Theme,
 ): string[] {
-	const rows = HEAD.concat(outfit.body);
-	const grid = rows.map((row) => Array.from(row));
+	// Layered stamp: the body is painted first, then the HEAD is dropped over
+	// it at a tick-derived offset. While the chibi talks, the mouth keeps the
+	// beat (ω/▽ every tick) and the head rides *every other beat* — a 1 Hz
+	// slap landing on the `▽` of a 4-tick bar, with the sway on the third bar
+	// — metronome cadence, not a nervous tic. All pure functions of `tick`:
+	// no per-instance animation state, blink/hearts/sparkles untouched idle.
+	const talking = expression === "talk";
+	const bob = talking && tick % 4 === 1 ? 1 : 0;
+	const sway = talking && Math.floor(tick / 4) % 4 === 2 ? 1 : 0;
+	const rows = HEAD.length + outfit.body.length;
+	const grid: string[][] = Array.from({ length: rows }, () =>
+		Array.from(".".repeat(SPRITE_COLS)),
+	);
+	outfit.body.forEach((line, r) => {
+		grid[HEAD.length + r] = Array.from(line);
+	});
+	HEAD.forEach((line, r) => {
+		const y = r + bob;
+		if (y >= rows) return;
+		const target = grid[y]!;
+		for (let c = 0; c < SPRITE_COLS; c++) {
+			const ch = line[c]!;
+			if (ch === ".") continue;
+			const x = c + sway;
+			if (x >= 0 && x < SPRITE_COLS) target[x] = ch;
+		}
+	});
 	const palette = outfit.palette;
 
 	// Sparkles land only in empty cells, so the silhouette stays clean.
@@ -254,6 +284,8 @@ export function renderSprite(
 	}
 
 	const face = FACE[expression];
+	const eyeRow = EYE_ROW + bob;
+	const mouthRow = MOUTH_ROW + bob;
 	const lines: string[] = [];
 	for (let r = 0; r < grid.length; r++) {
 		let line = "";
@@ -275,14 +307,14 @@ export function renderSprite(
 			let glyph = "█";
 			let color = palette[CLASS_COLOR[cell] ?? "cloth"]!;
 			if (cell === "h" || cell === "D" || cell === "B") glyph = "▄";
-			if (r === EYE_ROW && cell === "E") glyph = face.eye;
-			if (r === MOUTH_ROW && cell === "M") {
+			if (r === eyeRow && cell === "E") glyph = face.eye;
+			if (r === mouthRow && cell === "M") {
 				// The mouth is two cells wide; draw once, fill the rest with skin.
 				if (mouthDrawn) {
 					glyph = "█";
 					color = palette.skin;
 				} else {
-					glyph = face.mouth;
+					glyph = expression === "talk" && tick % 2 === 1 ? MOUTH_OPEN : face.mouth;
 					mouthDrawn = true;
 				}
 			}
