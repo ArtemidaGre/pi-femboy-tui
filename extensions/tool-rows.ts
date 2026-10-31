@@ -39,8 +39,20 @@ interface BaseRenderers {
 	renderResult?: (result: any, options: any, theme: Theme, context: any) => Component;
 }
 
+/**
+ * A single-line pastel row. Rendering is guarded: a decoration that throws
+ * must never take the transcript (or pi) down with it — we log once and hand
+ * back a plain line instead.
+ */
 const row = (make: (width: number) => string[]): Component => ({
-	render: (width: number) => make(width),
+	render: (width: number) => {
+		try {
+			return make(width);
+		} catch (error) {
+			console.debug("[femboy] tool row render failed:", error);
+			return [truncateToWidth(`\u00b7 pastel row hiccuped \u00b7 ${String(error).slice(0, 40)}`, Math.max(24, width))];
+		}
+	},
 	invalidate() {},
 });
 
@@ -65,7 +77,7 @@ function argChips(toolName: string, args: any): string[] {
 	const name = toolName.toLowerCase();
 	switch (name) {
 		case "bash": {
-			const command = str(args.command).split("\n")[0].trim();
+			const command = (str(args.command).split("\n")[0] ?? "").trim();
 			return command ? [command] : [];
 		}
 		case "read": {
@@ -80,7 +92,7 @@ function argChips(toolName: string, args: any): string[] {
 		}
 		case "write": {
 			const chips = pathOf(args) ? [pathOf(args)] : [];
-			const lines = args.content == null ? 0 : String(args.content).replace(/\n+$/, "").split("\n").length;
+			const lines = countLines(args.content == null ? "" : String(args.content));
 			if (lines) chips.push(`${lines} lines`);
 			return chips;
 		}

@@ -25,7 +25,15 @@ export const SPEECH_COLS = 30;
 const MAX_LINES = 12;
 
 /** Finished speech lingers this long (ms) before the bubble deflates. */
-const HOLD_MS = 8000;
+export const HOLD_MS = 8000;
+
+/**
+ * Streaming speech that received no new words for this long (ms) is a dead
+ * stream (abort, crash, or a producer that stopped calling us) — deflate the
+ * frame instead of freezing it wide. Must be longer than any honest thinking
+ * pause, shorter than a user's patience with a stuck box.
+ */
+export const STALL_MS = 12000;
 
 export interface Speech {
 	/** The windowed, wrapped lines the bubble draws (oldest first). */
@@ -48,9 +56,17 @@ export function clearSpeech(): void {
 	current = null;
 }
 
-/** Called by the companion each tick: drop stale, finished speech. */
+/** Called by the companion each tick: drop stale or dead-stream speech. */
 export function expireSpeech(): void {
-	if (current && !current.streaming && Date.now() - current.updatedAt > HOLD_MS) current = null;
+	if (!current) return;
+	const age = Date.now() - current.updatedAt;
+	if (current.streaming) {
+		// `updatedAt` only moves when the producer fed us, so this measures
+		// silence, not how long the message has been open.
+		if (age > STALL_MS) current = null;
+		return;
+	}
+	if (age > HOLD_MS) current = null;
 }
 
 /**

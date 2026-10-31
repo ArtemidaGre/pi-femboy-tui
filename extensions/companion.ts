@@ -46,16 +46,16 @@ import {
 } from "@earendil-works/pi-tui";
 import { GLYPH, type Swatch, ramp } from "./palette";
 import { type Expression, type Heart, SPRITE_COLS, renderSprite } from "./sprites";
-import { SPEECH_COLS, clearSpeech, expireSpeech, getSpeech } from "./speech";
+import { SPEECH_COLS, expireSpeech, getSpeech } from "./speech";
 import { currentOutfit, getVibe } from "./vibe";
 
 /** Sprite + 1-cell padding per side + 1-cell border per side. Silent width. */
-const BOX_COLS = SPRITE_COLS + 4;
+export const BOX_COLS = SPRITE_COLS + 4;
 
 /** Speech column + 1-cell rail + sprite block + border per side. Sized so the
  * text column's usable width is exactly `SPEECH_COLS` — no truncating lines
  * that were already wrapped to fit. */
-const TALK_COLS = Math.max(BOX_COLS, SPEECH_COLS + BOX_COLS + 2);
+export const TALK_COLS = Math.max(BOX_COLS, SPEECH_COLS + BOX_COLS + 2);
 
 /** Only show the chibi when the terminal has room to spare. */
 function roomy(termWidth: number, termHeight: number): boolean {
@@ -86,27 +86,42 @@ export class ChibiCompanion implements Component {
 		private overlayOpts: OverlayOptions,
 	) {
 		this.interval = setInterval(() => {
-			this.tick++;
-			this.stepHearts();
-			this.breathe();
-			this.tui.requestRender();
+			// A cosmetic animation must never take the session down with it.
+			try {
+				this.tick++;
+				this.stepHearts();
+				this.syncFrame();
+				this.tui.requestRender();
+			} catch (error) {
+				console.debug("[femboy] companion tick failed:", error);
+			}
 		}, 250);
 		// Never hold the event loop open for a cosmetic animation.
 		this.interval.unref?.();
 	}
 
-	/** Grow toward the speech width while talking, deflate to sprite width. */
-	private breathe(): void {
+	/**
+	 * Resize the overlay to match what is on screen right now. Public because
+	 * a driver (a test, or an embedding) that never ran a timer tick still has
+	 * to be able to ask the frame to catch up with the speech store.
+	 */
+	syncFrame(): void {
 		expireSpeech();
-		const speech = getSpeech();
-		const said = speech?.raw ?? "";
-		// Keep the frame open while words keep arriving; a 12 s stall means the
-		// stream died (abort/crash) — deflate instead of freezing wide.
-		if (speech?.streaming && said === this.lastSpeechRaw) {
-			if (Date.now() - speech.updatedAt > 12000) clearSpeech();
-		}
-		const wanted = speech && speech.lines.length > 0 ? TALK_COLS : BOX_COLS;
+		const wanted = this.intrinsicWidth();
 		if (this.overlayOpts.width !== wanted) this.overlayOpts.width = wanted;
+	}
+
+	/**
+	 * The width the frame *wants* right now: sprite-only when silent, wide
+	 * enough for the speech column while words are on screen. Derived from the
+	 * same store `expireSpeech()` just cleaned, so a dead stream (abort, crash,
+	 * or a producer that stopped feeding us) deflates within `STALL_MS` instead
+	 * of freezing wide — the old copy of this check compared the live text to a
+	 * stale field and therefore almost never fired.
+	 */
+	private intrinsicWidth(): number {
+		const speech = getSpeech();
+		return speech && speech.lines.length > 0 ? TALK_COLS : BOX_COLS;
 	}
 
 	dispose(): void {
@@ -172,8 +187,21 @@ export class ChibiCompanion implements Component {
 	}
 
 	render(width: number): string[] {
+		try {
+			return this.draw(width);
+		} catch (error) {
+			// The dock is decoration; pi keeps rendering without it.
+			console.debug("[femboy] companion render failed:", error);
+			return [truncateToWidth(`${GLYPH.heart} chibi hiccuped`, Math.max(BOX_COLS, Math.floor(width)))];
+		}
+	}
+
+	private draw(width: number): string[] {
 		const theme = this.theme;
-		const w = Math.min(Math.max(BOX_COLS, width), TALK_COLS);
+		// Never wider than the frame we actually own, never narrower than the
+		// sprite: pi asks for `overlayOptions.width`, and drifting from that made
+		// the silent box stretch to whatever the TUI offered.
+		const w = Math.min(Math.max(BOX_COLS, Math.min(width, this.intrinsicWidth())), TALK_COLS);
 		const inner = w - 2;
 		const outfit = currentOutfit();
 		const vibe = getVibe();

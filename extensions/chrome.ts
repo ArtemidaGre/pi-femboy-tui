@@ -34,7 +34,7 @@ import { homedir } from "node:os";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { type Color, type Component, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { GLYPH, type Swatch, ramp } from "./palette";
+import { GLYPH, type Swatch, gradientRun, ramp } from "./palette";
 import { CompanionController } from "./companion";
 import { SPRITE_COLS, miniFace, renderSprite } from "./sprites";
 import { currentOutfit, getVibe, moodLabel, onVibeChange, vibeShort } from "./vibe";
@@ -196,15 +196,6 @@ const KEY_TIPS: ReadonlyArray<[string, string]> = [
 	["ctrl+c", "interrupt the task"],
 ];
 
-/** `count` cells of `─`, coloured along `stops` from `start` across `total`. */
-function gradientCells(theme: Theme, stops: readonly Color[], count: number, start: number, total: number): string {
-	let out = "";
-	for (let i = 0; i < count; i++) {
-		out += theme.style("─", { fg: ramp(stops, total <= 1 ? 0 : (start + i) / (total - 1)) });
-	}
-	return out;
-}
-
 function borderLine(
 	theme: Theme,
 	stops: readonly Color[],
@@ -223,9 +214,9 @@ function borderLine(
 	const rightCount = free - leftCount;
 	return (
 		theme.style(corners[0]!, { fg: stops[0] }) +
-		gradientCells(theme, stops, leftCount, 0, inner) +
+		gradientRun(theme, stops, leftCount, 0, inner) +
 		theme.style(text, { fg: stops[1], bold: true }) +
-		gradientCells(theme, stops, rightCount, leftCount + labelW, inner) +
+		gradientRun(theme, stops, rightCount, leftCount + labelW, inner) +
 		theme.style(corners[1]!, { fg: stops[stops.length - 1] })
 	);
 }
@@ -461,19 +452,29 @@ export function makeFemboyEditor(CustomEditor: any): any {
 	if (typeof CustomEditor !== "function") return null;
 	return class FemboyEditor extends CustomEditor {
 		renderTopBorder(width: number, hiddenLineCount: number): string {
-			const vibe = getVibe();
-			if (!vibe.pastelMode || !vibe.ribbonEditor || hiddenLineCount > 0 || width < 28) {
-				return super.renderTopBorder(width, hiddenLineCount);
+			try {
+				const vibe = getVibe();
+				if (!vibe.pastelMode || !vibe.ribbonEditor || hiddenLineCount > 0 || width < 28) {
+					return super.renderTopBorder(width, hiddenLineCount);
+				}
+				const border: (text: string) => string = (this as any).borderColor;
+				const outfit = currentOutfit();
+				const label = vibe.uwuMode ? `${outfit.name} · uwu ${GLYPH.heart}` : `${outfit.name} ${GLYPH.heart}`;
+				const text = truncateToWidth(label, Math.max(1, width - 6));
+				const block = ` ${text} `;
+				const blockW = visibleWidth(block);
+				if (blockW >= width) return border("─".repeat(width));
+				const leftCount = Math.floor((width - blockW) / 2);
+				return border("─".repeat(leftCount)) + block + border("─".repeat(width - blockW - leftCount));
+			} catch (error) {
+				// A ribbon that cannot draw is a ribbon pi should not have asked for.
+				console.debug("[femboy] ribbon render failed:", error);
+				try {
+					return super.renderTopBorder(width, hiddenLineCount);
+				} catch {
+					return "─".repeat(Math.max(0, width));
+				}
 			}
-			const border: (text: string) => string = (this as any).borderColor;
-			const outfit = currentOutfit();
-			const label = vibe.uwuMode ? `${outfit.name} · uwu ${GLYPH.heart}` : `${outfit.name} ${GLYPH.heart}`;
-			const text = truncateToWidth(label, Math.max(1, width - 6));
-			const block = ` ${text} `;
-			const blockW = visibleWidth(block);
-			if (blockW >= width) return border("─".repeat(width));
-			const leftCount = Math.floor((width - blockW) / 2);
-			return border("─".repeat(leftCount)) + block + border("─".repeat(width - blockW - leftCount));
 		}
 	};
 }
@@ -635,13 +636,20 @@ function panelComponent(theme: Theme, data: PanelData, tui: TUI): Component {
 			cached = undefined;
 		},
 		render(width: number): string[] {
-			const rows = tui.terminal?.rows ?? 32;
-			const vibe = getVibe();
-			const key = `${width}|${rows}|${vibe.outfit}|${vibe.pastelMode}|${vibe.uwuMode}|${data.sessions.length}`;
-			if (cached?.key === key) return cached.lines;
-			const lines = welcomePanel(width, theme, data, rows);
-			cached = { key, lines };
-			return lines;
+			try {
+				const rows = tui.terminal?.rows ?? 32;
+				const vibe = getVibe();
+				const key = `${width}|${rows}|${vibe.outfit}|${vibe.pastelMode}|${vibe.uwuMode}|${data.sessions.length}`;
+				if (cached?.key === key) return cached.lines;
+				const lines = welcomePanel(width, theme, data, rows);
+				cached = { key, lines };
+				return lines;
+			} catch (error) {
+				// A header that cannot draw must not take the session with it.
+				console.debug("[femboy] welcome panel failed:", error);
+				cached = undefined;
+				return [truncateToWidth(`${GLYPH.heart} pastel header hiccuped`, Math.max(20, width))];
+			}
 		},
 	};
 }
@@ -649,9 +657,24 @@ function panelComponent(theme: Theme, data: PanelData, tui: TUI): Component {
 function barComponent(draw: (width: number) => string): Component {
 	return {
 		invalidate() {},
-		render: (width: number) => [draw(width)],
+		render: (width: number) => {
+			try {
+				return [draw(width)];
+			} catch (error) {
+				// The bars read live session data (model, usage, git): a stale
+				// context must cost a bar, not the whole session.
+				console.debug("[femboy] bar render failed:", error);
+				return [truncateToWidth(`${GLYPH.heart} pastel bar hiccuped`, Math.max(20, width))];
+			}
+		},
 	};
 }
+
+/**
+ * Internal components, exported only so the offline harness can inject faults
+ * and prove the chrome fails soft. Nothing in pi's extension API reads this.
+ */
+export const __testing = { barComponent, panelComponent };
 
 /**
  * One-shot floating welcome overlay: fire-and-forget, any keypress closes it,

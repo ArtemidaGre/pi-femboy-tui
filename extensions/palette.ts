@@ -37,15 +37,6 @@ export const SKIN = okhsl(30, 0.5, 0.86);
 /** A three-stop ramp, left → right, used for box borders and meters. */
 export type Swatch = readonly [Color, Color, Color];
 
-/**
- * A swatch derived from the active theme, so chrome never fights the theme.
- * Falls back to the house pastel trio if a token resolves oddly.
- */
-export function themeSwatch(theme: Theme): Swatch {
-	const c = theme.colors;
-	return [c.accent, c.border, c.borderAccent];
-}
-
 /** Interpolate across an arbitrary number of colour stops (t in 0..1). */
 export function ramp(stops: readonly Color[], t: number): Color {
 	if (stops.length === 1) return stops[0]!;
@@ -68,23 +59,6 @@ export function gradientRun(
 		out += theme.style(glyph, { fg: ramp(stops, total <= 1 ? 0 : (start + i) / (total - 1)) });
 	}
 	return out;
-}
-
-/**
- * A horizontal rule that carries a label in the middle:
- * `────── label ──────`, exactly `width` cells wide.
- */
-export function labeledRule(theme: Theme, stops: readonly Color[], width: number, label: string): string {
-	const w = Math.max(1, Math.floor(width));
-	const labelW = Math.min(w - 2, label.length);
-	const free = Math.max(0, w - labelW);
-	const left = Math.floor(free / 2);
-	if (labelW <= 0) return gradientRun(theme, stops, w, 0, w);
-	return (
-		gradientRun(theme, stops, left, 0, w) +
-		theme.style(label, { fg: ramp(stops, 0.5), bold: true }) +
-		gradientRun(theme, stops, w - left - labelW, left + labelW, w)
-	);
 }
 
 /** Glyph set — ordinary Unicode only, one cell each (except the multi-cell faces). */
@@ -114,11 +88,3 @@ export const GLYPH = {
 	wing: "˗ˏˋ",
 	wingEnd: "ˎˊ˗",
 } as const;
-
-export const SPARKLE_GLYPHS = ["✦", "✧", "*", "·"] as const;
-
-/** Loader frames: a blossom blooming and drifting, tinted along the swatch. */
-export function sparkleFrames(theme: Theme, stops: readonly Color[]): string[] {
-	const cycle = [GLYPH.heart, GLYPH.blossom, GLYPH.sparkle, GLYPH.flower, GLYPH.star, GLYPH.sparkle, GLYPH.blossom];
-	return cycle.map((glyph, i) => theme.style(glyph, { fg: ramp(stops, i / (cycle.length - 1)) }));
-}

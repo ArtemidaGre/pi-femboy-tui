@@ -57,6 +57,7 @@ import {
 	savedVibe,
 	settingsVibe,
 	setVibePersister,
+	vibeShort,
 	vibeSummary,
 } from "./vibe";
 import { markUserMessage, uwuifyMarkdown } from "./uwu";
@@ -208,18 +209,25 @@ export default function femboy(pi: ExtensionAPI): void {
 	// this transformer is the only per-frame view of the live stream, so it is
 	// the producer for speech.ts (the companion consumes on its own tick).
 	pi.registerMarkdownTransformer((markdown, info) => {
-		const vibe = getVibe();
-		if (info.messageType === "assistant" && vibe.pastelMode && vibe.companion) {
-			speakMarkdown(markdown, info.isStreaming);
+		try {
+			const vibe = getVibe();
+			if (info.messageType === "assistant" && vibe.pastelMode && vibe.companion) {
+				speakMarkdown(markdown, info.isStreaming);
+			}
+			if (info.messageType === "user") clearSpeech();
+			if (info.messageType === "assistant-thinking") return markdown;
+			const marked = vibe.pastelMode && info.messageType === "user" ? markUserMessage(markdown, `${GLYPH.flower} `) : markdown;
+			if (!vibe.uwuMode) return marked;
+			// Do not rewrite a message mid-stream: the flourish is chosen by line
+			// index, so re-picking it every token would jitter the text.
+			if (info.isStreaming && info.messageType !== "user") return marked;
+			return uwuifyMarkdown(marked);
+		} catch (error) {
+			// This runs on *every* streaming frame of *every* message. Rewriting
+			// the transcript is decoration — on any hiccup, hand pi the original.
+			console.debug("[femboy] markdown transform failed:", error);
+			return markdown;
 		}
-		if (info.messageType === "user") clearSpeech();
-		if (info.messageType === "assistant-thinking") return markdown;
-		const marked = vibe.pastelMode && info.messageType === "user" ? markUserMessage(markdown, `${GLYPH.flower} `) : markdown;
-		if (!vibe.uwuMode) return marked;
-		// Do not rewrite a message mid-stream: the flourish is chosen by line
-		// index, so re-picking it every token would jitter the text.
-		if (info.isStreaming && info.messageType !== "user") return marked;
-		return uwuifyMarkdown(marked);
 	});
 
 	// Pastel tool rows for every tool, composed with pi's own rendering.
@@ -231,8 +239,16 @@ export default function femboy(pi: ExtensionAPI): void {
 		// Layering: defaults ← settings.json ← this session's saved vibe.
 		hydrateVibe({ ...DEFAULT_VIBE, ...settingsVibe(ctx.cwd), ...savedVibe(ctx) });
 		if (ctx.mode !== "tui") return;
-		chrome?.dispose();
-		chrome = installChrome(ctx, await buildPanelData(ctx));
+		// Losing the pastel chrome must never lose the session: pi can still work
+		// with its own header, bars and loader.
+		try {
+			chrome?.dispose();
+			chrome = installChrome(ctx, await buildPanelData(ctx));
+		} catch (error) {
+			console.debug("[femboy] chrome install failed:", error);
+			ctx.ui.notify("pastel chrome could not load — pi's built-ins stay in charge", "warning");
+			return;
+		}
 		installEditorShell(ctx);
 	});
 
@@ -355,45 +371,49 @@ export default function femboy(pi: ExtensionAPI): void {
 			"Check or change the user's pastel vibe: headpats, outfit, chibi companion, uwu transcript rendering, and the pastel chrome takeover.",
 		promptSnippet: "Check or change the user's pastel vibe: headpats, outfit, uwu transcript rendering",
 		parameters: VIBE_PARAMS,
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const vibe = getVibe();
-			switch (params.action) {
-				case "headpat":
-					patchVibe({ headpats: vibe.headpats + 1 });
-					chrome?.celebrate();
-					break;
-				case "wear": {
-					const index = findOutfitIndex(params.outfit ?? "");
-					if (index === undefined) {
-						throw new Error(`unknown outfit "${params.outfit ?? ""}"; options: ${OUTFITS.map((o) => o.name).join(", ")}`);
-					}
-					patchVibe({ outfit: index });
-					break;
+	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		const vibe = getVibe();
+		switch (params.action) {
+			case "headpat":
+				patchVibe({ headpats: vibe.headpats + 1 });
+				chrome?.celebrate();
+				break;
+			case "wear": {
+				const index = findOutfitIndex(params.outfit ?? "");
+				if (index === undefined) {
+					throw new Error(`unknown outfit "${params.outfit ?? ""}"; options: ${OUTFITS.map((o) => o.name).join(", ")}`);
 				}
-				case "uwu_on":
-					patchVibe({ uwuMode: true });
-					break;
-				case "uwu_off":
-					patchVibe({ uwuMode: false });
-					break;
-				case "chrome_on":
-					patchVibe({ pastelMode: true });
-					break;
-				case "chrome_off":
-					patchVibe({ pastelMode: false });
-					chrome?.refresh();
-					break;
-				case "companion_on":
-					patchVibe({ companion: true });
-					break;
-				case "companion_off":
-					patchVibe({ companion: false });
-					break;
-				case "check":
-				default:
-					break;
+				patchVibe({ outfit: index });
+				break;
 			}
-			return { content: [{ type: "text", text: vibeSummary() }], details: { ...getVibe() } };
-		},
+			case "uwu_on":
+				patchVibe({ uwuMode: true });
+				break;
+			case "uwu_off":
+				patchVibe({ uwuMode: false });
+				break;
+			case "chrome_on":
+				patchVibe({ pastelMode: true });
+				break;
+			case "chrome_off":
+				patchVibe({ pastelMode: false });
+				break;
+			case "companion_on":
+				patchVibe({ companion: true });
+				break;
+			case "companion_off":
+				patchVibe({ companion: false });
+				break;
+			case "check":
+			default:
+				break;
+		}
+		// The model nudged the vibe — say so out loud. A silent `check` is not a
+		// change, so it must not spam a toast.
+		if (params.action !== "check") {
+			ctx.ui.notify(`${GLYPH.heart} the assistant touched your vibe · ${vibeShort()}`, "info");
+		}
+		return { content: [{ type: "text", text: vibeSummary() }], details: { ...getVibe() } };
+	},
 	});
 }

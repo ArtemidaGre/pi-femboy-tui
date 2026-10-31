@@ -65,9 +65,14 @@ export class FemboyOverlay implements Component {
 		private done: () => void,
 	) {
 		this.interval = setInterval(() => {
-			this.tick++;
-			this.stepHearts();
-			this.tui.requestRender();
+			// Cosmetic animation: guard it, never hold the session hostage.
+			try {
+				this.tick++;
+				this.stepHearts();
+				this.tui.requestRender();
+			} catch (error) {
+				console.debug("[femboy] closet tick failed:", error);
+			}
 		}, 120);
 		// Never hold the event loop open for a cosmetic animation.
 		this.interval.unref?.();
@@ -83,78 +88,91 @@ export class FemboyOverlay implements Component {
 	}
 
 	handleInput(data: string): void {
-		const items = this.items();
-		if (matchesKey(data, "up") || matchesKey(data, "ctrl+p")) {
-			this.cursor = (this.cursor - 1 + items.length) % items.length;
-		} else if (matchesKey(data, "down") || matchesKey(data, "ctrl+n")) {
-			this.cursor = (this.cursor + 1) % items.length;
-		} else if (matchesKey(data, "home")) {
-			this.cursor = 0;
-		} else if (matchesKey(data, "end")) {
-			this.cursor = items.length - 1;
-		} else if (matchesKey(data, "enter") || matchesKey(data, "return") || matchesKey(data, "space")) {
-			this.activate(items[this.cursor]);
-		} else if (matchesKey(data, "h")) {
-			this.pat();
-		} else if (matchesKey(data, "u")) {
-			this.toggle("uwu");
-		} else if (matchesKey(data, "p")) {
-			this.toggle("pastel");
-		} else if (matchesKey(data, "w")) {
-			this.cycleWelcome();
-		} else if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "ctrl+c")) {
-			this.finish();
-			return;
-		} else {
-			return;
+		try {
+			const items = this.items();
+			if (matchesKey(data, "up") || matchesKey(data, "ctrl+p")) {
+				this.cursor = (this.cursor - 1 + items.length) % items.length;
+			} else if (matchesKey(data, "down") || matchesKey(data, "ctrl+n")) {
+				this.cursor = (this.cursor + 1) % items.length;
+			} else if (matchesKey(data, "home")) {
+				this.cursor = 0;
+			} else if (matchesKey(data, "end")) {
+				this.cursor = items.length - 1;
+			} else if (matchesKey(data, "enter") || matchesKey(data, "return") || matchesKey(data, "space")) {
+				this.activate(items[this.cursor]);
+			} else if (matchesKey(data, "h")) {
+				this.pat();
+			} else if (matchesKey(data, "u")) {
+				this.toggle("uwu");
+			} else if (matchesKey(data, "p")) {
+				this.toggle("pastel");
+			} else if (matchesKey(data, "w")) {
+				this.cycleWelcome();
+			} else if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "ctrl+c")) {
+				this.finish();
+				return;
+			} else {
+				return;
+			}
+			this.tui.requestRender();
+		} catch (error) {
+			// A dead closet must never jam the terminal's input pump: log, say so,
+			// and hand the keys back to pi.
+			console.debug("[femboy] closet input failed:", error);
+			this.note = `oops, the closet hiccuped · ${String(error).slice(0, 40)}`;
+			this.tui.requestRender();
 		}
-		this.tui.requestRender();
 	}
 
 	render(width: number): string[] {
-		const safeWidth = Math.max(24, Math.floor(width));
-		const inner = safeWidth - 2;
-		const twoCol = inner >= 46;
-		const leftW = twoCol ? Math.min(SPRITE_COLS + 2, Math.max(SPRITE_COLS, Math.floor(inner * 0.5))) : inner;
-		const rightW = twoCol ? inner - leftW - 1 : inner;
-		const maxHeight = Math.max(12, (this.tui.terminal?.rows ?? 32) - 8);
+		try {
+			const safeWidth = Math.max(24, Math.floor(width));
+			const inner = safeWidth - 2;
+			const twoCol = inner >= 46;
+			const leftW = twoCol ? Math.min(SPRITE_COLS + 2, Math.max(SPRITE_COLS, Math.floor(inner * 0.5))) : inner;
+			const rightW = twoCol ? inner - leftW - 1 : inner;
+			const maxHeight = Math.max(12, (this.tui.terminal?.rows ?? 32) - 8);
 
-		const stops = currentOutfit().palette.border as Swatch;
-		// In the stacked layout the menu has to survive, so the chibi trims first.
-		const leftBudget = twoCol ? maxHeight : Math.max(6, maxHeight - 9);
-		const left = this.leftPanel(leftW, leftBudget);
-		const right = this.rightPanel(rightW, twoCol ? maxHeight : Math.max(6, maxHeight - left.length));
+			const stops = currentOutfit().palette.border as Swatch;
+			// In the stacked layout the menu has to survive, so the chibi trims first.
+			const leftBudget = twoCol ? maxHeight : Math.max(6, maxHeight - 9);
+			const left = this.leftPanel(leftW, leftBudget);
+			const right = this.rightPanel(rightW, twoCol ? maxHeight : Math.max(6, maxHeight - left.length));
 
-		const body: string[] = [];
-		if (twoCol) {
-			const rows = Math.min(maxHeight, Math.max(left.length, right.length));
-			const side = this.theme.style(GLYPH.side, { fg: ramp(stops, 0.5) });
-			const sep = this.theme.style(GLYPH.thin, { fg: ramp(stops, 0.5) });
-			for (let i = 0; i < rows; i++) {
-				const cell =
-					side +
-					truncateToWidth(left[i] ?? "", leftW, "", true) +
-					sep +
-					truncateToWidth(right[i] ?? "", rightW, "", true) +
-					side;
-				body.push(truncateToWidth(cell, safeWidth));
+			const body: string[] = [];
+			if (twoCol) {
+				const rows = Math.min(maxHeight, Math.max(left.length, right.length));
+				const side = this.theme.style(GLYPH.side, { fg: ramp(stops, 0.5) });
+				const sep = this.theme.style(GLYPH.thin, { fg: ramp(stops, 0.5) });
+				for (let i = 0; i < rows; i++) {
+					const cell =
+						side +
+						truncateToWidth(left[i] ?? "", leftW, "", true) +
+						sep +
+						truncateToWidth(right[i] ?? "", rightW, "", true) +
+						side;
+					body.push(truncateToWidth(cell, safeWidth));
+				}
+			} else {
+				const stacked = [...left, ...right];
+				const rows = Math.min(maxHeight, stacked.length);
+				const edge = this.theme.style(GLYPH.side, { fg: ramp(stops, 0.5) });
+				for (let i = 0; i < rows; i++) {
+					body.push(truncateToWidth(edge + truncateToWidth(stacked[i] ?? "", inner, "", true) + edge, safeWidth));
+				}
 			}
-		} else {
-			const stacked = [...left, ...right];
-			const rows = Math.min(maxHeight, stacked.length);
-			const edge = this.theme.style(GLYPH.side, { fg: ramp(stops, 0.5) });
-			for (let i = 0; i < rows; i++) {
-				body.push(truncateToWidth(edge + truncateToWidth(stacked[i] ?? "", inner, "", true) + edge, safeWidth));
-			}
+
+			const title = ` ${GLYPH.heart} FEMBOY TUI ${GLYPH.heart} `;
+			const ticker = `${this.note} · ${TICKER[Math.floor(this.tick / 30) % TICKER.length]}`;
+			return [
+				this.borderLine("top", safeWidth, title, stops[1]),
+				...body,
+				this.borderLine("bottom", safeWidth, truncateToWidth(ticker, Math.max(4, inner - 6)), stops[2]),
+			].map((line) => truncateToWidth(line, safeWidth));
+		} catch (error) {
+			console.debug("[femboy] closet render failed:", error);
+			return [truncateToWidth(`${GLYPH.heart} the closet hiccuped · q closes me`, Math.max(24, Math.floor(width)))];
 		}
-
-		const title = ` ${GLYPH.heart} FEMBOY TUI ${GLYPH.heart} `;
-		const ticker = `${this.note} · ${TICKER[Math.floor(this.tick / 30) % TICKER.length]}`;
-		return [
-			this.borderLine("top", safeWidth, title, stops[1]),
-			...body,
-			this.borderLine("bottom", safeWidth, truncateToWidth(ticker, Math.max(4, inner - 6)), stops[2]),
-		].map((line) => truncateToWidth(line, safeWidth));
 	}
 
 	// -- state ----------------------------------------------------------------
@@ -388,7 +406,7 @@ export class FemboyOverlay implements Component {
 		const snapshot = getVibe();
 		const stats = this.theme.fg("dim", `headpats ${snapshot.headpats} · mood ${moodLabel(snapshot.headpats)}`);
 		const detail = this.theme.fg("muted", this.theme.italic(items[this.cursor]?.detail ?? ""));
-		const tip = this.theme.fg("dim", TIPS[Math.floor(this.tick / 24) % TIPS.length]);
+		const tip = this.theme.fg("dim", TIPS[Math.floor(this.tick / 24) % TIPS.length] ?? "");
 
 		// Reserve room for header, rule, detail, stats, tip, hint; keep the cursor visible.
 		const reserved = 6;

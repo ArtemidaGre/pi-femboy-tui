@@ -332,8 +332,3 @@ export function miniFace(tick: number): string {
 	const eyes = tick % 28 < 2 ? "─" : GLYPH.fill;
 	return `( ${eyes} ${GLYPH.blushFace} ${eyes} )`;
 }
-
-/** The chibi shrunk to one line, for compact banners and non-TUI modes. */
-export function compactFace(tick: number): string {
-	return tick % 24 < 2 ? "( ─ ω ─ )" : miniFace(tick);
-}

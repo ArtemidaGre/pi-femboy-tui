@@ -28,7 +28,8 @@ Plus:
   file paths and commands are never uwuified)
 - **`/femboy-off`** — hand every slot back to pi instantly
 - **`femboy_vibe` tool** — the model can check the vibe, hand you a headpat,
-  or flip toggles itself
+  or flip toggles itself (and says so with a toast, so a vibe change never
+  happens behind your back)
 - **talking chibi** — while the LLM streams an assistant message, up to a
   dozen wrapped lines of its words appear as a **speech column to the left of
   the chibi**, joined by a dashed rail whose `▸` tail points into her mouth;
@@ -39,26 +40,64 @@ Plus:
   the message lands. The transcript itself is untouched — display-only, fed
   from the markdown transformer, zero extra inference
 
-Everything is driven by one store (`vibe.ts`): components read it at render
+Everything is driven by one store (`extensions/vibe.ts`): components read it at render
 time and subscribe for repaints, so a toggle lands on the next frame without
 rebuilding the editor — and flipping the ribbon never loses your draft. An
 idle session runs no timers at all.
 
+Nothing pastel is allowed to break pi: the markdown transformer, the header,
+both bars, the editor ribbon, every tool row, the chibi and the closet guard
+their own rendering. On a hiccup they log to the debug console and hand back a
+plain line (`♡ pastel bar hiccuped`) — the transcript, your draft, and pi's
+input pump keep working. `npm run check` proves it by injecting faults.
+
 ## Install
 
-Drop the extension into pi's extensions directory:
+As a pi package (recommended) — points pi straight at this working tree:
 
 ```sh
-git clone git@github.com:ArtemidaGre/pi-femboy-tui.git ~/.pi/agent/extensions/femboy
+pi install ./path/to/pi-femboy-tui     # local dev, loads extensions/index.ts + themes/femboy.json
+pi install git:github.com/ArtemidaGre/pi-femboy-tui
 ```
 
+Or drop the files into pi's resource directories yourself:
+
+```sh
+git clone git@github.com:ArtemidaGre/pi-femboy-tui.git
+cp -r pi-femboy-tui/extensions ~/.pi/agent/extensions/femboy
+cp pi-femboy-tui/themes/femboy.json ~/.pi/agent/themes/
+```
+
+(One source of truth, please: if you `pi install` the package, delete the
+hand-copied `~/.pi/agent/extensions/femboy` — two copies of ten files load as
+ten separate extension entries.)
+
 Then restart pi (or `/reload`). The chrome colours come from theme tokens, so
-it works with **any** theme — but a matching pastel theme (`femboy.json`) can
-be dropped into `~/.pi/agent/themes/` and selected with:
+it works with **any** theme; the bundled `themes/femboy.json` is the matching
+pastel palette:
 
 ```sh
 pi --use-theme femboy   # or /settings → Theme
 ```
+
+## Development
+
+```sh
+npm install          # pi's packages + typescript as devDependencies (peer, never bundled)
+npm run typecheck    # tsc --noEmit, strict + noUnusedLocals + noUncheckedIndexedAccess
+npm run check        # offline smoke tests: real pi loader, no TUI, no model call
+npm run check -- --show   # …and print a sample panel / chibi / closet
+```
+
+`tools/check.sh` runs two harnesses:
+
+- `link-check.mjs` — every named import must resolve to a *real runtime export*
+  (type-checking through jiti would not catch `import { homedir } from "node:path"`)
+- `render-check.mjs` — widths 24…220 × four outfits × every bar, the tool-row
+  resolver composing with pi's own renderers, uwu protecting code spans, the
+  closet surviving every key, the speech frame breathing open and deflating on
+  hold/stall expiry, and fault injection proving each pastel renderer degrades
+  to an apology line instead of throwing.
 
 ## Config
 
@@ -96,15 +135,20 @@ dock and the closet overlay.
 
 | File | Purpose |
 |---|---|
-| `index.ts` | extension entry: commands, shortcut, tool, wiring |
-| `vibe.ts` | single source of truth for pastel state + settings reader |
-| `chrome.ts` | slot takeover: welcome, status bar, metrics, footer, editor |
-| `companion.ts` | chibi dock on the right |
-| `overlay.ts` | the `/femboy` closet overlay |
-| `sprites.ts` | outfit sprite definitions |
-| `tool-rows.ts` | pastel tool rows via `registerToolRenderer()` resolver |
-| `uwu.ts` | display-only uwu markdown transformer |
-| `palette.ts` | glyphs and pastel colour helpers |
+| `extensions/index.ts` | extension entry: commands, shortcut, tool, wiring |
+| `extensions/vibe.ts` | single source of truth for pastel state + settings reader |
+| `extensions/chrome.ts` | slot takeover: welcome, status bar, metrics, footer, editor |
+| `extensions/companion.ts` | chibi dock on the right |
+| `extensions/speech.ts` | the chibi's live speech store (fed by the markdown transformer) |
+| `extensions/overlay.ts` | the `/femboy` closet overlay |
+| `extensions/sprites.ts` | outfit sprite definitions |
+| `extensions/tool-rows.ts` | pastel tool rows via `registerToolRenderer()` resolver |
+| `extensions/uwu.ts` | display-only uwu markdown transformer |
+| `extensions/palette.ts` | glyphs and pastel colour helpers |
+| `package.json` | pi-package manifest: `pi.extensions` + `pi.themes`, host packages as peers |
+| `tsconfig.json` | strict typecheck config (Bundler resolution: jiti loads `.ts` by path) |
+| `themes/femboy.json` | matching pastel theme (bundled with the package) |
+| `tools/check.sh` | offline harness: link check + render/fault checks |
 
 Tool rows use pi 1.4.0's renderer *resolver*: execution is never wrapped, and
 `next()` composes our summary line with pi's own expanded rendering (diffs,
