@@ -23,6 +23,7 @@ import { GLYPH, type Swatch, ramp } from "./palette";
 import { type Expression, type Heart, OUTFITS, SPRITE_COLS, renderSprite } from "./sprites";
 import type { VibeState, WelcomeMode } from "./vibe";
 import { currentOutfit, getVibe, moodLabel, patchVibe } from "./vibe";
+import { pairingStatus, patThroughPairing, wearThroughPairing } from "./pairing";
 
 type ActionId = "headpat" | "uwu" | "pastel" | "rows" | "ribbon" | "companion" | "welcome" | "reset" | "close";
 
@@ -266,10 +267,27 @@ export class FemboyOverlay implements Component {
 	}
 
 	private pat(): void {
-		const next = getVibe().headpats + 1;
-		patchVibe({ headpats: next });
 		this.happyUntil = this.tick + 24;
 		this.burstHearts();
+		if (pairingStatus() === "paired") {
+			// shared counter lives on the server; the mood feed repaints the badge.
+			void patThroughPairing(1)
+				.then((pushed) => {
+					if (pushed === "pushed") {
+						this.note = "shared headpat sent ♡ (mcp)";
+						return;
+					}
+					this.localPat();
+				})
+				.catch((error) => console.debug("[femboy] closet paired pat failed:", error));
+			return;
+		}
+		this.localPat();
+	}
+
+	private localPat(): void {
+		const next = getVibe().headpats + 1;
+		patchVibe({ headpats: next });
 		this.note =
 			next >= 100
 				? "transcendence: pure pastel uwu"
@@ -302,10 +320,22 @@ export class FemboyOverlay implements Component {
 	private activate(item: Item | undefined): void {
 		if (!item) return;
 		if (item.kind === "outfit") {
-			patchVibe({ outfit: item.index });
-			this.note = `now wearing ${OUTFITS[item.index]!.name} ${GLYPH.heart}`;
-			this.happyUntil = this.tick + 14;
-			this.invalidate();
+			const name = OUTFITS[item.index]!.name;
+			const paint = () => {
+				this.note = `now wearing ${name} ${GLYPH.heart}`;
+				this.happyUntil = this.tick + 14;
+				this.invalidate();
+			};
+			void (async () => {
+				const worn = await wearThroughPairing(name);
+				if (worn.result === "refused") {
+					this.note = `locked ♡ ${worn.reason}`;
+					this.invalidate();
+					return; // gated skin — do not paint it locally
+				}
+				if (worn.result === "offline") patchVibe({ outfit: item.index });
+				paint(); // "pushed": the state notification paints it for every window
+			})().catch((error) => console.debug("[femboy] closet wear failed:", error));
 			return;
 		}
 		switch (item.action) {

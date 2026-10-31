@@ -12,8 +12,9 @@
  *                    femboy_set_outfit / femboy_toggle_feature tool calls.
  *
  * Loop safety: an applied remote snapshot never re-pushes (applyingRemote
- * guard); a push we caused bounces back as a notification whose actor starts
- * with our own clientId prefix — dropped without a re-read.
+ * guard), and every apply is revision-checked — our own pushes bounce back as
+ * notifications and are re-applied idempotently (the pushing window paints too,
+ * the revision gate makes the echo a no-op when nothing moved).
  *
  * Offline is the happy path, not an error: `femboy.mcp.enabled:false` or an
  * unreachable server keeps vibe.ts purely local, exactly as before pairing.
@@ -80,12 +81,6 @@ const FEATURE_KEYS: Array<[vibeKey: keyof VibeState, feature: string]> = [
 
 function featureToVibeKey(feature: string): keyof VibeState | undefined {
 	return FEATURE_KEYS.find(([, name]) => name === feature)?.[0];
-}
-
-/** actor / updatedBy is `http:<name>:<clientId[0..8]>` — our own echo if the uuid tail matches. */
-function isOurEcho(updatedBy: string | null | undefined): boolean {
-	if (!client || !updatedBy) return false;
-	return updatedBy.includes(client.clientId.slice(0, 8));
 }
 
 function remoteOutfitIndex(outfitName: string): number | undefined {
@@ -201,8 +196,7 @@ export function initPairing(cwd: string): void {
 	client = createMcpClient(config);
 	onVibeChange(onLocalVibeChange);
 
-	client.onResourceUpdated(STATE_URI, (meta) => {
-		if (isOurEcho((meta?.["femboy.dev/actor"] as string) ?? null)) return;
+	client.onResourceUpdated(STATE_URI, () => {
 		void (async () => {
 			if (!client) return;
 			try {
@@ -244,32 +238,36 @@ export function pairingDetail(): string {
 	return statusDetail;
 }
 
-/** Headpats through the server when paired (shared counter), locally otherwise. */
-export async function patThroughPairing(intensity: number): Promise<boolean> {
-	if (!client || client.status !== "paired") return false;
+/**
+ * Headpats through the server when paired (shared counter + achievements).
+ * "pushed" ⇒ the mood notification paints vibe.headpats; "offline" ⇒ caller owns the local patch.
+ */
+export async function patThroughPairing(intensity: number): Promise<"pushed" | "offline"> {
+	if (!client || client.status !== "paired") return "offline";
 	try {
-		await client.callTool("femboy_headpat", { intensity });
-		return true;
+		const result = await client.callTool("femboy_headpat", { intensity });
+		return result.isError ? "offline" : "pushed";
 	} catch (error) {
 		console.debug("[femboy-pair] headpat push failed:", error);
-		return false;
+		return "offline";
 	}
 }
 
-/** Outfit through the server when paired; the notification comes back and paints us. */
-export async function wearThroughPairing(outfitName: string): Promise<boolean> {
-	if (!client || client.status !== "paired") return false;
+export type WearResult =
+	| { result: "pushed" } // server accepted — the state notification paints the outfit
+	| { result: "offline" } // not paired: caller patches the vibe locally
+	| { result: "refused"; reason: string }; // gated skin: server said no, don't paint it
+
+/** Outfit through the server when paired; refusals keep their reason for the UI. */
+export async function wearThroughPairing(outfitName: string): Promise<WearResult> {
+	if (!client || client.status !== "paired") return { result: "offline" };
 	try {
-		const result = await client.callTool("femboy_set_outfit", { outfit: outfitName });
-		if (result.isError) {
-			// gated skins are a server decision — don't paint it locally
-			console.debug("[femboy-pair] outfit refused:", result.text);
-			return false;
-		}
-		return true;
+		const response = await client.callTool("femboy_set_outfit", { outfit: outfitName });
+		if (response.isError) return { result: "refused", reason: response.text || "the closet says no" };
+		return { result: "pushed" };
 	} catch (error) {
 		console.debug("[femboy-pair] wear push failed:", error);
-		return false;
+		return { result: "offline" };
 	}
 }
 

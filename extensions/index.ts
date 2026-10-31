@@ -42,7 +42,7 @@ import {
 } from "./chrome";
 import { FemboyOverlay } from "./overlay";
 import { GLYPH } from "./palette";
-import { initPairing, shutdownPairing } from "./pairing";
+import { initPairing, pairingStatus, patThroughPairing, shutdownPairing, wearThroughPairing } from "./pairing";
 import { clearSpeech, speakMarkdown } from "./speech";
 import { OUTFITS, findOutfitIndex } from "./sprites";
 import { pastelToolRows } from "./tool-rows";
@@ -121,6 +121,22 @@ function installEditorShell(ctx: ExtensionContext): void {
 }
 
 function patOnce(ctx: ExtensionContext): void {
+	if (pairingStatus() === "paired") {
+		// shared counter: the server counts, reacts and broadcasts; we just paint hearts
+		void patThroughPairing(1)
+			.then((pushed) => {
+				if (pushed !== "pushed") {
+					const next = getVibe().headpats + 1;
+					patchVibe({ headpats: next });
+					ctx.ui.notify(`headpat #${next} — ${moodLabel(next)} ${GLYPH.heart}`, "info");
+					return;
+				}
+				chrome?.celebrate();
+				ctx.ui.notify(`shared headpat sent ♡ (mcp)`, "info");
+			})
+			.catch((error) => console.debug("[femboy] paired headpat failed:", error));
+		return;
+	}
 	const next = getVibe().headpats + 1;
 	patchVibe({ headpats: next });
 	chrome?.celebrate();
@@ -133,8 +149,19 @@ function wearOutfit(ctx: ExtensionContext, arg: string): void {
 		ctx.ui.notify(`unknown outfit — options: ${OUTFITS.map((outfit) => outfit.name).join(", ")}`, "warning");
 		return;
 	}
-	patchVibe({ outfit: index });
-	ctx.ui.notify(`now wearing ${OUTFITS[index]!.name} ${GLYPH.heart}`, "info");
+	void (async () => {
+		const worn = await wearThroughPairing(OUTFITS[index]!.name);
+		if (worn.result === "refused") {
+			ctx.ui.notify(`the closet refuses: ${worn.reason}`, "warning");
+			return; // gated skin — do not paint it locally
+		}
+		if (worn.result === "pushed") {
+			ctx.ui.notify(`now wearing ${OUTFITS[index]!.name} ♡ (shared via mcp)`, "info");
+			return; // the state notification paints everyone, including us
+		}
+		patchVibe({ outfit: index });
+		ctx.ui.notify(`now wearing ${OUTFITS[index]!.name} ${GLYPH.heart}`, "info");
+	})().catch((error) => console.debug("[femboy] wear failed:", error));
 }
 
 function cycleWelcome(ctx: ExtensionContext, mode?: WelcomeMode): void {
@@ -378,16 +405,25 @@ export default function femboy(pi: ExtensionAPI): void {
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 		const vibe = getVibe();
 		switch (params.action) {
-			case "headpat":
+			case "headpat": {
+				if ((await patThroughPairing(1)) === "pushed") {
+					chrome?.celebrate();
+					break; // the mood feed paints the shared counter
+				}
 				patchVibe({ headpats: vibe.headpats + 1 });
 				chrome?.celebrate();
 				break;
+			}
 			case "wear": {
 				const index = findOutfitIndex(params.outfit ?? "");
 				if (index === undefined) {
 					throw new Error(`unknown outfit "${params.outfit ?? ""}"; options: ${OUTFITS.map((o) => o.name).join(", ")}`);
 				}
-				patchVibe({ outfit: index });
+				const worn = await wearThroughPairing(OUTFITS[index]!.name);
+				if (worn.result === "refused") {
+					throw new Error(`the shared closet refuses "${OUTFITS[index]!.name}": ${worn.reason}`);
+				}
+				if (worn.result !== "pushed") patchVibe({ outfit: index });
 				break;
 			}
 			case "uwu_on":
@@ -415,6 +451,7 @@ export default function femboy(pi: ExtensionAPI): void {
 		// The model nudged the vibe — say so out loud. A silent `check` is not a
 		// change, so it must not spam a toast.
 		if (params.action !== "check") {
+			await new Promise((resolve) => setTimeout(resolve, 120)); // let the paired paint land first
 			ctx.ui.notify(`${GLYPH.heart} the assistant touched your vibe · ${vibeShort()}`, "info");
 		}
 		return { content: [{ type: "text", text: vibeSummary() }], details: { ...getVibe() } };
