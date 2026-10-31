@@ -83,6 +83,7 @@ function normalize(vibe: VibeState): VibeState {
 
 let state: VibeState = { ...DEFAULT_VIBE };
 let persist: ((vibe: VibeState) => void) | undefined;
+let remoteBadge = "";
 const listeners = new Set<(next: VibeState, patch: Partial<VibeState>) => void>();
 
 /** Called once from index.ts so patches survive reload/fork. */
@@ -184,5 +185,14 @@ export function vibeSummary(): string {
 
 /** Short line for the status bar / notifications. */
 export function vibeShort(): string {
-	return `${GLYPH.heart} ${currentOutfit().name} · pats ${state.headpats} · ${moodLabel(state.headpats)}`;
+	return `${GLYPH.heart} ${currentOutfit().name} · pats ${state.headpats} · ${moodLabel(state.headpats)}${remoteBadge}`;
+}
+
+/**
+ * Pairing badge appended to vibeShort (" ♡mcp" when an MCP server is live).
+ * Redraws listeners with an empty patch — decoration only, never persisted. */
+export function setRemoteBadge(badge: string): void {
+	if (badge === remoteBadge) return;
+	remoteBadge = badge;
+	for (const listener of listeners) listener(state, {});
 }

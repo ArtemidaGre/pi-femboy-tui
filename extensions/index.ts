@@ -42,6 +42,7 @@ import {
 } from "./chrome";
 import { FemboyOverlay } from "./overlay";
 import { GLYPH } from "./palette";
+import { initPairing, shutdownPairing } from "./pairing";
 import { clearSpeech, speakMarkdown } from "./speech";
 import { OUTFITS, findOutfitIndex } from "./sprites";
 import { pastelToolRows } from "./tool-rows";
@@ -238,6 +239,8 @@ export default function femboy(pi: ExtensionAPI): void {
 		clearSpeech();
 		// Layering: defaults ← settings.json ← this session's saved vibe.
 		hydrateVibe({ ...DEFAULT_VIBE, ...settingsVibe(ctx.cwd), ...savedVibe(ctx) });
+		// Background connector to femboy-mcp: offline is the default, never fatal.
+		initPairing(ctx.cwd);
 		if (ctx.mode !== "tui") return;
 		// Losing the pastel chrome must never lose the session: pi can still work
 		// with its own header, bars and loader.
@@ -255,6 +258,7 @@ export default function femboy(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async (_event, ctx) => {
 		chrome?.dispose();
 		chrome = undefined;
+		void shutdownPairing();
 		// Restore pi's own loader in case the next session loads without femboy.
 		try {
 			ctx.ui.setWorkingIndicator();
